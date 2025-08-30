@@ -1,0 +1,74 @@
+/* ====== THEME WRAPPER ====== */
+.theme {
+  padding-bottom: 40px;
+  transition: background 0.3s, color 0.3s;
+}
+
+/* Light & Dark backgrounds */
+.theme-light {
+  background: #f9f9f9;
+  color: #222;
+}
+
+.theme-dark {
+  background: #000000;
+  color: #f5f5f5;
+}
+
+/* Streamlit root background (to cover whole page) */
+html, body, .stApp {
+  background: transparent !important;
+  transition: background 0.3s, color 0.3s;
+}
+
+/* ====== CHAT MESSAGES ====== */
+.msg {
+  padding: 12px 14px;
+  border-radius: 12px;
+  margin: 8px 0;
+  line-height: 1.5;
+  font-size: 16px;
+  word-wrap: break-word;
+  max-width: 80%;
+}
+
+/* Light theme chat bubbles */
+.theme-light .msg.user {
+  background: #f1f1f1;
+  color: #000;
+  text-align: left;
+}
+
+.theme-light .msg.assistant {
+  background: #e8f7ff;
+  color: #000;
+  text-align: left;
+}
+
+/* Dark theme chat bubbles */
+.theme-dark .msg.user {
+  background: #222;
+  color: #fff;
+  text-align: left;
+}
+
+.theme-dark .msg.assistant {
+  background: #333;
+  color: #fff;
+  text-align: left;
+}
+
+/* Typing cursor animation */
+.cursor {
+  opacity: 0.7;
+  font-weight: bold;
+}
+
+/* ====== FOOTER ====== */
+.footer {
+  margin-top: 24px;
+  font-size: 13px;
+  opacity: 0.7;
+  text-align: center;
+}
+
