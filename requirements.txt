@@ -13,5 +13,5 @@ av==10.0.0
 numpy==1.24.4
 vosk==0.3.45
 scipy==1.10.1
-
+vosk sounddevice==0.5.2
 
