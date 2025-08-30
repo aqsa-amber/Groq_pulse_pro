@@ -1,0 +1,32 @@
+# Core
+streamlit==1.37.1
+streamlit-webrtc==0.47.1
+av==10.0.0
+numpy==1.24.4
+scipy==1.10.1
+requests==2.32.3
+
+# Offline speech recognition (optional, if model present)
+vosk==0.3.45
+sounddevice==0.5.2
+
+# Online fallback (Google STT)
+SpeechRecognition==3.10.4
+
+# TTS
+pyttsx3==2.90
+
+# Database
+sqlalchemy==2.0.31
+
+# File handling & OCR
+pytesseract==0.3.13
+Pillow==10.4.0
+python-docx==1.1.2
+pandas==2.0.3
+PyPDF2==3.0.1
+python-dotenv==1.0.1
+
+
+
+
