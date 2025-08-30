@@ -1,18 +1,19 @@
-streamlit==1.40.1
+streamlit==1.37.1
 streamlit-webrtc==0.47.1
-requests==2.32.3
-python-dotenv==1.0.1
-pyttsx3==2.90
-PyPDF2==3.0.1
-python-docx==1.1.2
-pandas==2.0.3
-pytesseract==0.3.13
-Pillow==10.4.0
-SpeechRecognition==3.10.4
 av==10.0.0
 numpy==1.24.4
-vosk==0.3.45
 scipy==1.10.1
+
+# Offline speech recognition (vosk)
+vosk==0.3.45
 sounddevice==0.5.2
 
+# Online fallback (Google SpeechRecognition)
+SpeechRecognition==3.10.4
+
+# TTS
+pyttsx3==2.90
+
+# Database
+sqlalchemy==2.0.31
 
