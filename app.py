@@ -6,6 +6,8 @@ import threading
 import numpy as np
 import av
 import streamlit as st
+import zipfile
+import urllib.request
 
 # -------------------------------------------------
 # Page Config MUST be first
@@ -44,14 +46,22 @@ from utils.db import ConversationStore
 from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
 from vosk import Model, KaldiRecognizer
 
-# Load Vosk model once (must exist in repo root)
+# -------------------------------------------------
+# Auto-download Vosk model if missing
+# -------------------------------------------------
+MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+MODEL_DIR = "vosk-model-small-en-us-0.15"
+
 if "vosk_model" not in st.session_state:
-    model_path = "vosk-model-small-en-us-0.15"
-    if not os.path.exists(model_path):
-        st.error(f"❌ Vosk model not found at {model_path}. Please add it to your repo root.")
-        st.stop()
-    else:
-        st.session_state.vosk_model = Model(model_path)
+    if not os.path.exists(MODEL_DIR):
+        st.warning("⬇️ Downloading Vosk model (first run may take a minute)...")
+        zip_path = "model.zip"
+        urllib.request.urlretrieve(MODEL_URL, zip_path)
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(".")
+        os.remove(zip_path)
+        st.success("✅ Vosk model downloaded!")
+    st.session_state.vosk_model = Model(MODEL_DIR)
 
 vosk_model = st.session_state.vosk_model
 
@@ -353,6 +363,7 @@ if submitted and text_in.strip():
 # -------------------------------------------------
 st.markdown("<div class='footer'>GROQ PULSE • Powered by Groq</div>", unsafe_allow_html=True)
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 
