@@ -3,9 +3,9 @@ import time
 import json
 import queue
 import threading
-import streamlit as st
-import av
 import numpy as np
+import av
+import streamlit as st
 
 # -------------------------------------------------
 # Page Config MUST be first
@@ -25,7 +25,7 @@ api_url = st.secrets.get("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/co
 tts_enabled_default = st.secrets.get("TTS_ENABLED", False)
 tts_provider = st.secrets.get("TTS_PROVIDER", "pyttsx3")
 
-st.write("API Key Loaded:", (api_key[:5] + "…") if api_key else "None")
+st.write("API Key Loaded:", api_key[:5] + "…" if api_key else "⚠️ Not set")
 
 # -------------------------------------------------
 # Local utils
@@ -39,158 +39,76 @@ from utils.tts import speak_text_if_enabled
 from utils.db import ConversationStore
 
 # -------------------------------------------------
-# WebRTC (browser mic support) - Vosk STT
+# WebRTC (browser mic support) - now using Vosk
 # -------------------------------------------------
 from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
 from vosk import Model, KaldiRecognizer
 
-# Try to import scipy for high-quality resampling; fall back if unavailable
-try:
-    import scipy.signal as _scipy_signal  # optional
-    _HAS_SCIPY = True
-except Exception:
-    _HAS_SCIPY = False
-
-# Load Vosk model once
+# Load Vosk model once (must exist in repo root)
 if "vosk_model" not in st.session_state:
-    model_path = "vosk-model-small-en-us-0.15"  # make sure this folder exists in project root
+    model_path = "vosk-model-small-en-us-0.15"
     if not os.path.exists(model_path):
-        st.error(f"❌ Vosk model not found at '{model_path}'. "
-                 f"Download & unzip a model (e.g., vosk-model-small-en-us-0.15) into project root.")
+        st.error(f"❌ Vosk model not found at {model_path}. Please add it to your repo root.")
         st.stop()
-    st.session_state.vosk_model = Model(model_path)
+    else:
+        st.session_state.vosk_model = Model(model_path)
+
 vosk_model = st.session_state.vosk_model
 
-def _to_mono_float32(arr: np.ndarray) -> np.ndarray:
-    """
-    Normalize AV frame ndarray to mono float32 in [-1, 1].
-    Handles shapes: (samples,), (samples, channels), (channels, samples)
-    """
-    if arr.ndim == 1:
-        mono = arr
-    elif arr.ndim == 2:
-        # Heuristic: if first dim looks like channels (<=8), transpose
-        if arr.shape[0] <= 8 and arr.shape[0] < arr.shape[1]:
-            arr = arr.T
-        mono = arr.mean(axis=1)
-    else:
-        mono = arr.flatten()
-
-    if mono.dtype != np.float32:
-        mono = mono.astype(np.float32, copy=False)
-
-    # If samples appear to be int16 scaled, normalize to [-1,1]
-    # Many browsers already give float32 in [-1,1]; this is safe anyway.
-    np.clip(mono, -1.0, 1.0, out=mono)
-    return mono
-
-def _resample_to_16k(mono_f32: np.ndarray, input_rate: int) -> np.ndarray:
-    """
-    Resample mono float32 audio to 16kHz float32.
-    Uses scipy.signal.resample_poly if available; otherwise falls back to numpy interpolation.
-    """
-    target_rate = 16000
-    if input_rate == target_rate:
-        return mono_f32
-
-    if _HAS_SCIPY:
-        # High quality polyphase resampling
-        return _scipy_signal.resample_poly(mono_f32, target_rate, input_rate).astype(np.float32, copy=False)
-
-    # Lightweight fallback: linear interpolation
-    duration = len(mono_f32) / float(input_rate)
-    new_len = int(round(duration * target_rate))
-    if new_len <= 1:
-        return np.zeros(0, dtype=np.float32)
-    old_times = np.linspace(0.0, duration, num=len(mono_f32), endpoint=False)
-    new_times = np.linspace(0.0, duration, num=new_len, endpoint=False)
-    return np.interp(new_times, old_times, mono_f32).astype(np.float32, copy=False)
-
-def _float32_to_int16_pcm(mono_f32_16k: np.ndarray) -> bytes:
-    """
-    Convert mono float32 [-1,1] @16kHz to int16 PCM bytes.
-    """
-    np.clip(mono_f32_16k, -1.0, 1.0, out=mono_f32_16k)
-    pcm_i16 = (mono_f32_16k * 32767.0).astype(np.int16)
-    return pcm_i16.tobytes()
 
 class AudioProcessor(AudioProcessorBase):
     """
-    Non-blocking audio processor:
-    - recv_audio_frame(): very fast — convert/resample & enqueue
-    - background thread: reads queue, feeds Vosk, posts results
-    This prevents WebRTC from buffering/stopping.
+    Collect audio chunks from browser mic,
+    resample to 16kHz PCM16, and process with Vosk in background.
     """
     def __init__(self):
-        self.q: "queue.Queue[bytes]" = queue.Queue(maxsize=50)
+        self.q = queue.Queue()
         self.recognizer = KaldiRecognizer(vosk_model, 16000)
         self.running = True
+        self._last_text = None
 
-        # Start background recognizer thread
-        self.thread = threading.Thread(target=self._process_audio_loop, daemon=True)
+        # Start background thread for recognition
+        self.thread = threading.Thread(target=self._process_audio, daemon=True)
         self.thread.start()
 
     def recv_audio_frame(self, frame: av.AudioFrame):
-        # Convert AV frame -> mono float32
-        arr = frame.to_ndarray()
-        mono_f32 = _to_mono_float32(arr)
+        # Convert float32 → int16 PCM
+        audio = frame.to_ndarray().flatten()
+        if audio.dtype != np.float32:
+            audio = audio.astype(np.float32)
+        np.clip(audio, -1.0, 1.0, out=audio)
+        pcm16 = (audio * 32767).astype(np.int16).tobytes()
 
-        # Resample to 16kHz
-        in_rate = int(getattr(frame, "sample_rate", 48000) or 48000)
-        mono_16k = _resample_to_16k(mono_f32, in_rate)
-
-        # Convert to PCM16 bytes
-        pcm_bytes = _float32_to_int16_pcm(mono_16k)
-
-        # Enqueue without blocking (drop if queue is full to keep real-time)
+        # Push to queue (non-blocking)
         try:
-            self.q.put_nowait(pcm_bytes)
+            self.q.put_nowait(pcm16)
         except queue.Full:
-            pass  # drop chunk; better to drop than block
+            pass
 
         return frame
 
-    def _process_audio_loop(self):
-        # Accumulate small chunks to form reasonable buffers for Vosk
-        buf = bytearray()
-        min_bytes = int(0.4 * 16000 * 2)  # ~0.4s @ 16kHz, 16-bit
-
+    def _process_audio(self):
         while self.running:
             try:
-                chunk = self.q.get(timeout=0.5)
+                data = self.q.get(timeout=1)
             except queue.Empty:
-                # If we have partial audio, try processing it
-                if buf:
-                    self._feed_recognizer(bytes(buf))
-                    buf.clear()
                 continue
 
-            buf.extend(chunk)
-
-            if len(buf) >= min_bytes:
-                self._feed_recognizer(bytes(buf))
-                buf.clear()
-
-    def _feed_recognizer(self, data: bytes):
-        # Feed a chunk into Vosk and handle results
-        try:
             if self.recognizer.AcceptWaveform(data):
                 result = json.loads(self.recognizer.Result())
-                text = (result.get("text") or "").strip()
-                if text:
+                text = result.get("text", "").strip()
+                if text and text != self._last_text:
                     st.session_state["voice_prompt"] = text
+                    self._last_text = text
                     if st.session_state.get("debug_mode"):
-                        st.write("✅ Full result:", result)
+                        st.write("✅ Final:", result)
             else:
                 partial = json.loads(self.recognizer.PartialResult())
-                part = (partial.get("partial") or "").strip()
-                if part:
-                    st.session_state["voice_prompt"] = part
+                if partial.get("partial"):
+                    st.session_state["voice_prompt"] = partial["partial"]
                     if st.session_state.get("debug_mode"):
                         st.write("⏳ Partial:", partial)
-        except Exception as e:
-            if st.session_state.get("debug_mode"):
-                st.warning(f"Recognizer error: {e}")
+
 
 # -------------------------------------------------
 # CSS (themes)
@@ -231,15 +149,13 @@ with st.sidebar:
     st.title("⚙️ Settings")
 
     st.session_state.theme = st.radio(
-        "Theme",
-        ["light", "dark"],
+        "Theme", ["light", "dark"],
         index=0 if st.session_state.theme == "light" else 1
     )
 
     st.subheader("Model Parameters")
     st.session_state.settings["model"] = st.selectbox(
-        "Model",
-        ["llama3-8b-8192", "llama3-70b-8192"],
+        "Model", ["llama3-8b-8192", "llama3-70b-8192"],
         index=0 if st.session_state.settings["model"] == "llama3-8b-8192" else 1
     )
     st.session_state.settings["temperature"] = st.slider(
@@ -257,7 +173,7 @@ with st.sidebar:
     st.session_state["tts_enabled"] = tts_enabled
 
     st.subheader("Debug")
-    st.session_state.debug_mode = st.toggle("Enable Debug Logs", value=False)
+    st.session_state.debug_mode = st.toggle("Show raw Vosk JSON", value=False)
 
     st.subheader("Conversations 📜")
     conversations = store.list_conversations()
@@ -385,7 +301,7 @@ def ensure_conversation():
 # -------------------------------------------------
 # Process User Input
 # -------------------------------------------------
-if submitted and text_in and text_in.strip():
+if submitted and text_in.strip():
     ensure_conversation()
 
     if uploaded:
@@ -422,7 +338,10 @@ if submitted and text_in and text_in.strip():
     st.session_state.messages.append({"role": "assistant", "content": assistant_content})
     st.session_state.current_conversation["messages"] = st.session_state.messages
     store.save_conversation(st.session_state.current_conversation)
-    store.log_interaction(text_in, assistant_content, elapsed, conversation_id=st.session_state.current_conversation["id"])
+    store.log_interaction(
+        text_in, assistant_content, elapsed,
+        conversation_id=st.session_state.current_conversation["id"]
+    )
 
     if st.session_state.get("tts_enabled"):
         speak_text_if_enabled(assistant_content)
